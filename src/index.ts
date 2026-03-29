@@ -38,6 +38,10 @@ class UserState {
 
     constructor(private member: GuildMember) {
         this.displayName = member.displayName;
+        // Remove any existing prefix from display name (I HATE RACE CONDITIONS)
+        while (this.displayName.startsWith('[✋') && this.displayName.includes(']')) {
+            this.displayName = this.displayName.substring(this.displayName.indexOf(']') + 2);
+        }
         this._raisedHand = 0;
     }
 
@@ -519,7 +523,11 @@ class DiscordBot {
             const members = await fullGuild.members.fetch();
             for (const [memberId, member] of members) {
                 if (member.user.bot) continue; // Ignore bots
-                const displayName = member.displayName;
+                let displayName = member.displayName;
+                while (displayName.startsWith('[✋') && displayName.includes(']')) {
+                    displayName = displayName.substring(displayName.indexOf(']') + 2);
+                }
+                
                 if (displayName.startsWith('[✋') && displayName.includes(']')) {
                     const originalName = displayName.substring(displayName.indexOf(']') + 2);
                     const promise = member.setNickname(originalName).catch(error => {
