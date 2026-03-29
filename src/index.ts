@@ -208,7 +208,7 @@ class MessageHandler {
                     description: Array.from(this.channelState.users.values())
                         .filter(user => user.raisedHand > 0)
                         .sort((a, b) => a.raisedHand - b.raisedHand)
-                        .map(user => `[✋ ${user.raisedHand}] <@${user.userId}>`)
+                        .map(user => `[✋ ${user.raisedHand} ] <@${user.userId}>`)
                         .join('\n') || undefined,
                     color: 0x5865F2, // Blurple
                 }
@@ -458,6 +458,19 @@ class DiscordBot {
             const voiceChannels = fullGuild.channels.cache.filter((c: any) => c.isVoiceBased());
             for (const [channelId, channel] of voiceChannels) {
                 this.getManager(guildId).getOrCreateChannel(channelId);
+            }
+
+            // Remove dangling prefixes for members
+            const members = await fullGuild.members.fetch();
+            for (const [memberId, member] of members) {
+                if (member.user.bot) continue; // Ignore bots
+                const displayName = member.displayName;
+                if (displayName.startsWith('[✋') && displayName.includes(']')) {
+                    const originalName = displayName.substring(displayName.indexOf(']') + 2);
+                    member.setNickname(originalName).catch(error => {
+                        console.error(`Error resetting nickname for user ${memberId} in guild ${guildId}:`, error);
+                    });
+                }
             }
         }
         
