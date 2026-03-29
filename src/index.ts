@@ -203,107 +203,128 @@ class VoiceChannelManager {
 class MessageHandler {
     channelState: VoiceChannelState;
     latestMessageId: string | null;
+    private _mutex: Promise<void> = Promise.resolve();
 
     constructor(channelState: VoiceChannelState, private bot: DiscordBot) {
         this.channelState = channelState;
         this.latestMessageId = null;
     }
 
-    async updateMessage(shouldDeleteOld: boolean) {
-        const channel = await this.bot.client.channels.fetch(this.channelState.channelId);
-        if (!channel || !channel.isVoiceBased()) return;
-
-        // We should delete the old message before sending a new one to avoid clutter
-        if (shouldDeleteOld) {
-            await this.deleteMessage();
+    // Simple mutex to serialize message operations
+    private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+        let release: () => void = () => {};
+        const prev = this._mutex;
+        this._mutex = new Promise<void>(resolve => { release = resolve; });
+        await prev;
+        try {
+            return await fn();
+        } finally {
+            release();
         }
-
-        // We need a message
-        let message = null;
-        if (this.latestMessageId) {
-            try {
-                message = await channel.messages.fetch(this.latestMessageId);
-            } catch (error) {
-                // Assume our message has been deleted by someone else, so we need to send a new one
-                this.latestMessageId = null;
-            }
-        }
-
-        const messageContent = {
-            embeds: [
-                {
-                    type: EmbedType.Rich,
-                    title: this.channelState.getMaxRaisedHand() > 0 ? 'Paceltās rokas' : 'Nav paceltu roku',
-                    description: Array.from(this.channelState.users.values())
-                        .filter(user => user.raisedHand > 0)
-                        .sort((a, b) => a.raisedHand - b.raisedHand)
-                        .map(user => `[✋ ${user.raisedHand} ] <@${user.userId}>`)
-                        .join('\n') || undefined,
-                    color: 0x5865F2, // Blurple
-                }
-            ],
-            components: [
-                {
-                    type: ComponentType.ActionRow,
-                    components: [
-                        {
-                            type: ComponentType.Button,
-                            style: ButtonStyle.Success,
-                            emoji: '✋',
-                            label: 'Pacelt',
-                            customId: 'raise_hand',
-                        } satisfies InteractionButtonComponentData,
-                        {
-                            type: ComponentType.Button,
-                            style: ButtonStyle.Danger,
-                            emoji: '👇',
-                            label: 'Nolaist',
-                            customId: 'lower_hand',
-                        } satisfies InteractionButtonComponentData,
-                    ],
-                }
-            ],
-            allowedMentions: { parse: [] }, // Disable @everyone and @here mentions
-            nonce: Math.random().toString(36).substring(2, 15), // Unique nonce to prevent duplicate message issues (TODO: handle better)
-            enforceNonce: true,
-            tts: false,
-            flags: [ MessageFlags.SuppressNotifications ],
-        } satisfies MessageCreateOptions | MessageEditOptions;
-
-        if (!message) {
-            // If we don't have an existing message, we need to send a new one
-            try {
-                console.log(`Sending new message in channel ${names.channel(this.channelState.channelId)}`);
-                message = await channel.send(messageContent);
-                this.latestMessageId = message.id;
-            } catch (error) {
-                console.error('Error sending initial message:', error);
-                return;
-            }
-        } else {
-            // We have an existing message, so we should edit it
-            try {
-                console.log(`Editing existing message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
-                await message.edit({ ...messageContent, flags: [] }); // Clear flags on edit (notifications are not sent on edit, discord disallows this flag on edit)
-            } catch (error) {
-                console.error('Error editing existing message:', error);
-            }
-        }
-
     }
 
-    async deleteMessage() {
+    async updateMessage(shouldDeleteOld: boolean) {
+        return this.withLock(async () => {
+            const channel = await this.bot.client.channels.fetch(this.channelState.channelId);
+            if (!channel || !channel.isVoiceBased()) return;
+
+            // We should delete the old message before sending a new one to avoid clutter
+            if (shouldDeleteOld) {
+                await this._deleteMessageUnlocked();
+            }
+
+            // We need a message
+            let message = null;
+            if (this.latestMessageId) {
+                try {
+                    message = await channel.messages.fetch(this.latestMessageId);
+                } catch (error) {
+                    // Assume our message has been deleted by someone else, so we need to send a new one
+                    this.latestMessageId = null;
+                }
+            }
+
+            const messageContent = {
+                embeds: [
+                    {
+                        type: EmbedType.Rich,
+                        title: this.channelState.getMaxRaisedHand() > 0 ? 'Paceltās rokas' : 'Nav paceltu roku',
+                        description: Array.from(this.channelState.users.values())
+                            .filter(user => user.raisedHand > 0)
+                            .sort((a, b) => a.raisedHand - b.raisedHand)
+                            .map(user => `[✋ ${user.raisedHand} ] <@${user.userId}>`)
+                            .join('\n') || undefined,
+                        color: 0x5865F2, // Blurple
+                    }
+                ],
+                components: [
+                    {
+                        type: ComponentType.ActionRow,
+                        components: [
+                            {
+                                type: ComponentType.Button,
+                                style: ButtonStyle.Success,
+                                emoji: '✋',
+                                label: 'Pacelt',
+                                customId: 'raise_hand',
+                            } satisfies InteractionButtonComponentData,
+                            {
+                                type: ComponentType.Button,
+                                style: ButtonStyle.Danger,
+                                emoji: '👇',
+                                label: 'Nolaist',
+                                customId: 'lower_hand',
+                            } satisfies InteractionButtonComponentData,
+                        ],
+                    }
+                ],
+                allowedMentions: { parse: [] }, // Disable @everyone and @here mentions
+                nonce: Math.random().toString(36).substring(2, 15), // Unique nonce to prevent duplicate message issues (TODO: handle better)
+                enforceNonce: true,
+                tts: false,
+                flags: [ MessageFlags.SuppressNotifications ],
+            } satisfies MessageCreateOptions | MessageEditOptions;
+
+            if (!message) {
+                // If we don't have an existing message, we need to send a new one
+                try {
+                    console.log(`Sending new message in channel ${names.channel(this.channelState.channelId)}`);
+                    message = await channel.send(messageContent);
+                    this.latestMessageId = message.id;
+                } catch (error) {
+                    console.error('Error sending initial message:', error);
+                    return;
+                }
+            } else {
+                // We have an existing message, so we should edit it
+                try {
+                    console.log(`Editing existing message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
+                    await message.edit({ ...messageContent, flags: [] }); // Clear flags on edit (notifications are not sent on edit, discord disallows this flag on edit)
+                } catch (error) {
+                    console.error('Error editing existing message:', error);
+                }
+            }
+        });
+    }
+
+    private async _deleteMessageUnlocked() {
         if (this.latestMessageId) {
-            console.log(`Deleting message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
+            console.log(`[DEBUG] (Unlocked) Deleting message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
             try {
                 const channel = await this.bot.client.channels.fetch(this.channelState.channelId);
                 if (!channel || !channel.isVoiceBased()) return;
                 await channel.messages.delete(this.latestMessageId);
                 this.latestMessageId = null;
             } catch (error) {
-                console.error('Error deleting message:', error);
+                console.error('[DEBUG] Error deleting message (unlocked):', error);
             }
         }
+    }
+
+    async deleteMessage() {
+        return this.withLock(async () => {
+            await this._deleteMessageUnlocked();
+        });
     }
 }
 
