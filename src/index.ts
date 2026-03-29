@@ -1,6 +1,36 @@
 
 import { Client, Events, GatewayIntentBits, type VoiceBasedChannel, GuildMember, type MessageCreateOptions, EmbedType, ComponentType, type InteractionButtonComponentData, ButtonStyle, type MessageEditOptions, MessageFlags, VoiceState } from 'discord.js';
 
+class DiscordResolver {
+    constructor(public bot: DiscordBot) {}
+
+    member(guildId: string, userId: string): string {
+        const manager = this.bot.getManager(guildId);
+        for (const channelState of manager.channels.values()) {
+            const user = channelState.getUser(userId);
+            if (user) {
+                return user.displayName;
+            }
+        }
+        // Fallback to getting the member directly
+        return this.bot.client.guilds.cache.get(guildId)?.members.cache.get(userId)?.displayName || `${userId}`;
+    }
+
+    channel(channelId: string): string {
+        const channel = this.bot.client.channels.cache.get(channelId);
+        if (channel && 'name' in channel && channel.name) return channel.name;
+        return `${channelId}`;
+    }
+
+    guild(guildId: string): string {
+        const guild = this.bot.client.guilds.cache.get(guildId);
+        if (guild) return guild.name;
+        return `${guildId}`;
+    }
+}
+
+const names: DiscordResolver = new DiscordResolver(null as any); // Placeholder, will be set properly in DiscordBot constructor
+
 class UserState {
     // TODO: add persistent caching for display names, so we can update them on name changes and not lose them on restart
     displayName: string;
@@ -25,13 +55,13 @@ class UserState {
         if (position === 0) {
             // Reset nickname when hand is lowered
             this.member.setNickname(this.displayName).catch(error => {
-                console.error(`Error resetting nickname for user ${this.userId}:`, error);
+                console.error(`Error resetting nickname for user ${names.member(this.member.guild.id, this.member.id)} in guild ${names.guild(this.member.guild.id)}:`, error);
             });
         } else {
             // Update nickname to show raised hand position
             const newNickname = `[✋ ${position} ] ${this.displayName}`;
             this.member.setNickname(newNickname).catch(error => {
-                console.error(`Error setting nickname for user ${this.userId}:`, error);
+                console.error(`Error setting nickname for user ${names.member(this.member.guild.id, this.member.id)} in guild ${names.guild(this.member.guild.id)}:`, error);
             });
         }
     }
@@ -164,7 +194,7 @@ class VoiceChannelManager {
     printState() {
         console.log('Current Voice Channel States:');
         for (const [channelId, channelState] of this.channels) {
-            console.log(`Channel ID: ${channelId}, Tracking: ${channelState.tracking}`);
+            console.log(`Channel: ${names.channel(channelId)}, Tracking: ${channelState.tracking}`);
             channelState.printUsers();
         }
     }
@@ -195,7 +225,6 @@ class MessageHandler {
                 message = await channel.messages.fetch(this.latestMessageId);
             } catch (error) {
                 // Assume our message has been deleted by someone else, so we need to send a new one
-                console.error('Error fetching existing message for update:', error);
                 this.latestMessageId = null;
             }
         }
@@ -244,6 +273,7 @@ class MessageHandler {
         if (!message) {
             // If we don't have an existing message, we need to send a new one
             try {
+                console.log(`Sending new message in channel ${names.channel(this.channelState.channelId)}`);
                 message = await channel.send(messageContent);
                 this.latestMessageId = message.id;
             } catch (error) {
@@ -253,6 +283,7 @@ class MessageHandler {
         } else {
             // We have an existing message, so we should edit it
             try {
+                console.log(`Editing existing message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
                 await message.edit({ ...messageContent, flags: [] }); // Clear flags on edit (notifications are not sent on edit, discord disallows this flag on edit)
             } catch (error) {
                 console.error('Error editing existing message:', error);
@@ -263,6 +294,7 @@ class MessageHandler {
 
     async deleteMessage() {
         if (this.latestMessageId) {
+            console.log(`Deleting message with ID ${this.latestMessageId} in channel ${names.channel(this.channelState.channelId)}`);
             try {
                 const channel = await this.bot.client.channels.fetch(this.channelState.channelId);
                 if (!channel || !channel.isVoiceBased()) return;
@@ -280,6 +312,7 @@ class DiscordBot {
     voiceChannelManagers: Map<string, VoiceChannelManager>; // guild -> manager
 
     constructor() {
+        names.bot = this; // Set the bot reference in the names resolver
         this.client = new Client({
             intents: [
                 GatewayIntentBits.Guilds,
@@ -306,13 +339,13 @@ class DiscordBot {
                         const promise = this.client.guilds.fetch(guildId).then(guild => {
                             guild.members.fetch(user.userId).then(member => {
                                 member.setNickname(user.displayName).catch(error => {
-                                    console.error(`Error resetting nickname for user ${user.userId} in guild ${guildId}:`, error);
+                                    console.error(`Error resetting nickname for user ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
                                 });
                             }).catch(error => {
-                                console.error(`Error fetching member ${user.userId} in guild ${guildId}:`, error);
+                                console.error(`Error fetching member ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
                             });
                         }).catch(error => {
-                            console.error(`Error fetching guild ${guildId}:`, error);
+                            console.error(`Error fetching guild ${names.guild(guildId)}:`, error);
                         });
 
                         promises.push(promise);
@@ -361,7 +394,7 @@ class DiscordBot {
 
         this.client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             // Is this the first join for this channel? If so, we need to create a message for this channel
-            if (!oldState.channelId && newState.channelId) {
+            if (newState.channelId) {
                 const channel = await this.client.channels.fetch(newState.channelId);
                 if (!channel || !channel.isVoiceBased()) return; // Unreachable
                 if (channel.members.size === 1) { // This is the first user joining, so we need to create a message for this channel
@@ -419,11 +452,11 @@ class DiscordBot {
     }
 
     async handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState) {
-        console.log(`Voice state update in channel ${newState.channelId} for user ${newState.id}`);
+        console.log(`Voice state update in channel ${names.channel(newState.channelId || oldState.channelId || "<unknown>")} for user ${newState.id}`);
 
         // User joined a voice channel
         if (!oldState.channelId && newState.channelId) {
-            console.log(`User ${newState.id} joined channel ${newState.channelId}`);
+            console.log(`User ${names.member(newState.guild.id, newState.id)} joined channel ${names.channel(newState.channelId)}`);
             const channelState = this.getManager(newState.guild.id).getOrCreateChannel(newState.channelId);
             const freshUserState = new UserState(newState.member ?? (await newState.guild.members.fetch(newState.id)));
             channelState.addUser(freshUserState);
@@ -431,13 +464,13 @@ class DiscordBot {
 
         // User left a voice channel
         if (oldState.channelId && !newState.channelId) {
-            console.log(`User ${newState.id} left channel ${oldState.channelId}`);
+            console.log(`User ${names.member(newState.guild.id, newState.id)} left channel ${names.channel(oldState.channelId)}`);
             this.getManager(newState.guild.id).removeUserFromChannel(oldState.channelId, newState.id);
         }
 
         // User switched voice channels
         if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
-            console.log(`User ${newState.id} switched from channel ${oldState.channelId} to ${newState.channelId}`);
+            console.log(`User ${names.member(newState.guild.id, newState.id)} switched from channel ${names.channel(oldState.channelId)} to ${names.channel(newState.channelId)}`);
             this.getManager(newState.guild.id).removeUserFromChannel(oldState.channelId, newState.id);
             const newChannelState = this.getManager(newState.guild.id).getOrCreateChannel(newState.channelId);
             const freshUserState = new UserState(newState.member ?? (await newState.guild.members.fetch(newState.id)));
@@ -468,7 +501,7 @@ class DiscordBot {
                 if (displayName.startsWith('[✋') && displayName.includes(']')) {
                     const originalName = displayName.substring(displayName.indexOf(']') + 2);
                     member.setNickname(originalName).catch(error => {
-                        console.error(`Error resetting nickname for user ${memberId} in guild ${guildId}:`, error);
+                        console.error(`Error resetting nickname for user ${names.member(guildId, memberId)} in guild ${names.guild(guildId)}:`, error);
                     });
                 }
             }
