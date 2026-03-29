@@ -1,0 +1,44 @@
+services:
+  ctfd:
+    build: .
+    restart: always
+    # environment:
+    #   - UPLOAD_FOLDER=/var/uploads
+    #   - DATABASE_URL=postgresql+psycopg://ctfd:ctfd@db/ctfd
+    #   - REDIS_URL=redis://cache:6379
+    #   - WORKERS=1
+    #   - LOG_FOLDER=/var/log/CTFd
+    #   - ACCESS_LOG=-
+    #   - ERROR_LOG=-
+    #   - REVERSE_PROXY=true
+    volumes:
+      - ./.env:/app/.env:ro
+    # depends_on:
+    #   - db
+    networks:
+      internal:
+      default:
+
+  # db:
+  #   image: postgres:18.3-alpine
+  #   restart: always
+  #   shm_size: 128mb
+  #   environment:
+  #     - POSTGRES_USER=ctfd
+  #     # Note: For more complex environments, read: https://github.com/docker-library/docs/blob/master/postgres/README.md#docker-secrets
+  #     - POSTGRES_PASSWORD=ctfd
+  #     - POSTGRES_DB=ctfd
+  #     - PGDATA=/var/lib/postgresql/data/pgdata
+  #   volumes:
+  #     - .data/postgres:/var/lib/postgresql/data
+  #   networks:
+  #       internal:
+  #   # TODO: find out if this is relevant for postgres as well, and if so, add it back in
+  #   # # This command is required to set important mariadb defaults
+  #   # command: [mysqld, --character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci, --wait_timeout=28800, --log-warnings=0]
+
+networks:
+  default:
+    driver: bridge
+  internal:
+    internal: true
