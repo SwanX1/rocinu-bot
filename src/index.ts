@@ -252,7 +252,7 @@ class MessageHandler {
                         description: Array.from(this.channelState.users.values())
                             .filter(user => user.raisedHand > 0)
                             .sort((a, b) => a.raisedHand - b.raisedHand)
-                            .map(user => `[✋ ${user.raisedHand} ] <@${user.userId}>`)
+                            .map(user => `- <@${user.userId}>`)
                             .join('\n') || undefined,
                         color: 0x5865F2, // Blurple
                     }
@@ -513,6 +513,8 @@ class DiscordBot {
                 this.getManager(guildId).getOrCreateChannel(channelId);
             }
 
+            const promises = [];
+
             // Remove dangling prefixes for members
             const members = await fullGuild.members.fetch();
             for (const [memberId, member] of members) {
@@ -520,10 +522,16 @@ class DiscordBot {
                 const displayName = member.displayName;
                 if (displayName.startsWith('[✋') && displayName.includes(']')) {
                     const originalName = displayName.substring(displayName.indexOf(']') + 2);
-                    member.setNickname(originalName).catch(error => {
+                    const promise = member.setNickname(originalName).catch(error => {
                         console.error(`Error resetting nickname for user ${names.member(guildId, memberId)} in guild ${names.guild(guildId)}:`, error);
                     });
+                    promises.push(promise);
                 }
+            }
+
+            if (promises.length > 0) {
+                console.log(`Found ${promises.length} members with dangling prefixes in guild ${names.guild(guildId)}`);
+                await Promise.allSettled(promises);
             }
         }
         
