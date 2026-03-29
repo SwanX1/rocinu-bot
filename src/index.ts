@@ -345,43 +345,42 @@ class DiscordBot {
         this.voiceChannelManagers = new Map();
         this.registerEvents();
 
-
-        process.on('SIGINT', () => {
+        process.on('SIGINT', async () => {
             const promises = [];
             console.log('Shutting down gracefully...');
             // Unregister all client events
             this.client.removeAllListeners();
 
-            // Lower all hands, delete all messages before shutdown to avoid leaving orphaned messages in channels
-            for (const [guildId, manager] of this.voiceChannelManagers) {
-                for (const channelState of manager.channels.values()) {
-                    for (const user of channelState.users.values()) {
-                        // Reset all display names
-                        const promise = this.client.guilds.fetch(guildId).then(guild => {
-                            guild.members.fetch(user.userId).then(member => {
-                                member.setNickname(user.displayName).catch(error => {
-                                    console.error(`Error resetting nickname for user ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
+            try {
+                // Lower all hands, delete all messages before shutdown to avoid leaving orphaned messages in channels
+                for (const [guildId, manager] of this.voiceChannelManagers) {
+                    for (const channelState of manager.channels.values()) {
+                        for (const user of channelState.users.values()) {
+                            // Reset all display names
+                            const promise = this.client.guilds.fetch(guildId).then(guild => {
+                                guild.members.fetch(user.userId).then(member => {
+                                    member.setNickname(user.displayName).catch(error => {
+                                        console.error(`Error resetting nickname for user ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
+                                    });
+                                }).catch(error => {
+                                    console.error(`Error fetching member ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
                                 });
                             }).catch(error => {
-                                console.error(`Error fetching member ${names.member(guildId, user.userId)} in guild ${names.guild(guildId)}:`, error);
+                                console.error(`Error fetching guild ${names.guild(guildId)}:`, error);
                             });
-                        }).catch(error => {
-                            console.error(`Error fetching guild ${names.guild(guildId)}:`, error);
-                        });
 
+                            promises.push(promise);
+                        }
+                        const promise = channelState.messageHandler.deleteMessage();
                         promises.push(promise);
                     }
-                    const promise = channelState.messageHandler.deleteMessage();
-                    promises.push(promise);
                 }
-            }
-
-            Promise.all(promises).then(() => {
+                await Promise.allSettled(promises);
+            } catch (error) {
+                console.error('Error during shutdown:', error);
+            } finally {
                 process.exit(0);
-            }).catch(error => {
-                console.error('Error occurred while shutting down:', error);
-                process.exit(1);
-            });
+            }
         });
     }
 
